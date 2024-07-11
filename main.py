@@ -14,6 +14,7 @@ from PIL import Image
 
 
 DONE_JSON = '.done.json'
+HOMETOWN = '落霞镇'
 
 
 def log(str):
@@ -32,6 +33,7 @@ class wuxia:
 
     def load(self):
         self.wx = None
+        self.region = None
 
         log('Load')
 
@@ -39,6 +41,9 @@ class wuxia:
         for i in range(3):
             for dev in adb.device_list():
                 if 'emulator-' in dev.serial or 'localhost:555' in dev.serial:
+                    if dev.get_state() != 'device':
+                        adb.disconnect(dev.serial)
+                        continue
                     self.wx = dev
                     break
 
@@ -91,8 +96,6 @@ class wuxia:
             self.click((650, 430), 800)  # 切换设备
         self.click((770, 470), 8000)
 
-        subprocess.run(['taskkill', '/F', '/IM', 'HD-Player.exe'])
-
     def update(self):
         self.s = self.wx.screenshot()
         if self.s.size != algo.SCREEN:
@@ -103,7 +106,13 @@ class wuxia:
 
         region = algo.img2str(self.s, algo.SUB_REGION)
         if '#(' in region:
-            raise Exception(f"bad region {region}")
+            if self.region:
+                if 'NA' in self.region:
+                    return
+                raise Exception(f"bad region {region}")
+            self.region = ('NA', (1, 1))
+            self.gomap(HOMETOWN)
+            return
 
         region = region.replace('(', ',').replace(')', ',').split(',')
         self.region = (region[0], (int(region[1]), int(region[2])))
@@ -166,8 +175,8 @@ class wuxia:
                 self.click(algo.POS_IDLE)
 
                 self.click(algo.SUB_ACTION(0))
-                self.click((768, 248))  # 查看药方
-                self.click((858, 533), 500)  # 确认丹方
+                self.click((768, 248), 500)  # 查看药方
+                self.click((858, 533), 1000)  # 确认丹方
 
                 self.update()
                 hot = self.subhash(algo.SUB_DAN_HOT)
@@ -180,8 +189,8 @@ class wuxia:
                         self.click(algo.SUB_DAN_FAN, 0)
                         time.sleep(tm/1000)
 
-                self.click((935, 496), 1000)  # 离开
-                self.click((497, 390), 1000)  # 去 老郎中
+                self.click((935, 496), 1500)  # 离开
+                self.click((497, 390), 1500)  # 去 老郎中
                 continue
 
             else:
@@ -223,8 +232,8 @@ class wuxia:
 
             gopng = cv2.imread('gomap.png')
             ret = cv2.minMaxLoc(cv2.matchTemplate(
-                np.array(wx.s), gopng, cv2.TM_CCOEFF_NORMED))
-            log(f'gomap result {ret}')
+                np.array(self.s), gopng, cv2.TM_CCOEFF_NORMED))
+            log(f'gomap {map} {ret}')
             if ret[1] > 0.8:
                 self.click(ret[3], 3000)
                 self.update()
@@ -248,12 +257,15 @@ class wuxia:
 
     def go(self, region):
         log(f'Go {region}')
-        self.gomap(region[0])
 
         last = ()
         ecnt = 0
-        while True:
+        retry = 0
+        while retry < 150:
+            retry += 1
             self.update()
+            if self.region[0] != region[0]:
+                self.gomap(region[0])
             pos = self.region[1]
             if last != pos:
                 last = pos
@@ -264,7 +276,7 @@ class wuxia:
             elif pos == region[1]:
                 return
 
-            if ecnt <= 5:
+            if ecnt <= 3:
                 self.click(self.dist(pos, region[1]), 1000)
                 ecnt += 1
                 continue
@@ -274,11 +286,15 @@ class wuxia:
                 self.click(self.dist(pos, algo.STUCK[key]), 1000)
                 continue
 
+            if self.region[0] == HOMETOWN:
+                raise Exception('already in HOMETOWN')
+
             log(f'stuck at {key}')
-            ecnt = 0
-            self.gomap('落霞镇')
-            self.update()
+            ecnt = -3
+            self.gomap(HOMETOWN)
             self.gomap(region[0])
+
+        raise Exception('too many retries in go()')
 
     def daylight(self):
         self.update()
@@ -286,7 +302,7 @@ class wuxia:
         if b > 140:
             return
         log(f'bright -> {b}')
-        self.go(('落霞镇', (23, 14)))
+        self.go((HOMETOWN, (23, 14)))
         self.click(algo.SUB_NEAR(1), 600)
         self.click(algo.POS_IDLE, 800)
         self.click(algo.SUB_ACTION(0), 5000)
@@ -310,7 +326,7 @@ class wuxia:
     def setdone(self, name, short=False):
         next = 80000
         if short:
-            next = 6*3600-600
+            next = 3*3600
         self.done[name] = next + time.time()
         with open(DONE_JSON, 'w') as f:
             json.dump(self.done, f, indent=2)
@@ -318,6 +334,55 @@ class wuxia:
 
     def isdone(self, name):
         return self.done.get(name, 0) > time.time()
+
+    def doact(self):
+        for i in range(4):
+            pos = algo.SUB_ACTION(i)
+            h = algo.subhash(wx.s, pos)
+
+            log(f'{i} {h}')
+            if h in ('c97c355c6a0cae08',):  # 庖丁解牛
+                self.click(pos, 3000)
+                self.click(algo.POS_IDLE, 2000)
+                return
+
+        for i in range(4):
+            pos = algo.SUB_ACTION(i)
+            h = algo.subhash(wx.s, pos)
+
+            # 宰杀/拔草寻花/曲院风荷/取水
+            if h in ('64ad7dc4453b36b8', '0e8f4a2706026a2e', '406a89b92d02b3b4', '2a6178c2af0c2f1f'):
+                self.click(pos, 3000)
+                self.click(algo.POS_IDLE, 2000)
+                return
+
+            if h in ('c61ac622d0f191df', ):  # 喂食
+                self.click(pos, 1000)
+                self.click((426, 265), 1000)  # 米 (326, 265)  鱼饵
+                self.click(algo.POS_IDLE, 1000)
+                self.click(algo.POS_IDLE, 3000)
+                self.click(algo.SUB_NEAR(0), 800)
+                self.click(algo.SUB_ACTION(0), 5000)  # 搜索
+                return
+
+            if h in ('28adcc73d92da80f', ):  # 练武
+                self.click(pos, 5000)
+                return
+
+            if h in ('05239573f0a332eb', ):  # 挑战
+                self.click(pos, 2000)
+                self.click(pos, 2000)
+                self.jump(20)
+                return
+
+            if h in ('7d988460f6d701d5', '16f120bde69e49a2'):  # 买卖 / 门派商店
+                self.click(pos, 2000)
+                self.shop()
+                return
+
+            if h in ('b0ddffdf32fcedd4', ):  # 离开
+                self.click(pos, 1000)
+                return
 
     def resource(self):
         for area, addrs in algo.RESOURCE.items():
@@ -360,44 +425,7 @@ class wuxia:
                 else:
                     time.sleep(4)
                     self.update()
-
-                    for i in range(4):
-                        pos = algo.SUB_ACTION(i)
-                        h = algo.subhash(wx.s, pos)
-                        log(f'{i} {h}')
-                        # 宰杀/拔草寻花/曲院风荷/取水
-                        if h in ('64ad7dc4453b36b8', '0e8f4a2706026a2e', '406a89b92d02b3b4', '2a6178c2af0c2f1f'):
-                            self.click(pos, 3000)
-                            self.click(algo.POS_IDLE, 2000)
-                            break
-
-                        if h in ('c61ac622d0f191df', ): # 喂食
-                            self.click(pos, 1000)
-                            self.click((326, 265), 1000) # 米
-                            self.click(algo.POS_IDLE, 1000)
-                            self.click(algo.POS_IDLE, 3000)
-                            self.click(algo.SUB_NEAR(0), 800)
-                            self.click(algo.SUB_ACTION(0), 5000) # 搜索
-                            break
-
-                        if h in ('28adcc73d92da80f', ):  # 练武
-                            self.click(pos, 5000)
-                            break
-
-                        if h in ('05239573f0a332eb', ):  # 挑战
-                            self.click(pos, 2000)
-                            self.click(pos, 2000)
-                            self.jump(20)
-                            break
-
-                        if h in ('7d988460f6d701d5', '16f120bde69e49a2'):  # 买卖 / 门派商店
-                            self.click(pos, 2000)
-                            self.shop()
-                            break
-
-                        if h in ('b0ddffdf32fcedd4', ):  # 离开
-                            self.click(pos, 1000)
-                            break
+                    self.doact()
 
     def jump(self, cnt):
         for i in range(cnt):
@@ -465,7 +493,7 @@ class wuxia:
         except:
             return 50
 
-    def fight(self):
+    def fight70(self):
         area = '青城山'
         if self.region[0] != area:
             self.go(('成都', (21, 16)))
@@ -474,7 +502,7 @@ class wuxia:
             self.click(algo.SUB_ACTION(1))
             self.click(algo.POS_IDLE, 1000)
             self.update()
-            if self.subhash(algo.SUB_ACTION(0)) == '8798752b3e0d58bc': # 答应下来
+            if self.subhash(algo.SUB_ACTION(0)) == '8798752b3e0d58bc':  # 答应下来
                 self.click(algo.SUB_ACTION(0), 800)
             else:
                 self.click(algo.SUB_ACTION(1), 800)
@@ -489,6 +517,70 @@ class wuxia:
             for pos in [(18, 17), (15, 18), (13, 12), (10, 15), (8, 11)]:
                 self.go((area, pos))
                 time.sleep(1)
+
+    def fight(self):
+        area = '大雪山'
+        self.go((area, (13, 20)))
+
+        while self.stamina() > 20:
+            for pos in [(9, 16), (4, 17), (9, 23), (10, 30), (4, 24)]:
+                self.go((area, pos))
+                time.sleep(1)
+
+
+    def xplant(self):
+        self.click(algo.SUB_NEAR(1), 600)
+        for i in range(4):
+            self.update()
+            h = self.subhash(algo.SUB_PLANT)
+            if h != '4be321783be15182': # 活力
+                #log(f'no dialog {i} {h}')
+                break
+            self.click((760, 330+70*i)) # plant action
+            for j in range(8):
+                time.sleep(0.5)
+                self.update()
+                h = self.subhash(algo.SUB_PLANTING)
+                if h != '08c81c66597d921f':
+                    #log(f'no planting {i} {j} {h}')
+                    break
+            if j > 0:
+                break
+
+        self.click(algo.POS_IDLE)
+        self.update()
+
+    def plant(self):
+        area = '龙泉镇'
+
+        ecnt = 0
+        while ecnt < 5:
+            for pos in [(19, 15), (19, 16), (19, 17), (20, 17)]:
+                self.go((area, pos))
+
+                if self.subhash(algo.SUB_NEAR(1)) != '59ec98a1e3fcf0dd': # empty
+                    ecnt = 0
+                    self.xplant()
+                    if self.subhash(algo.SUB_NEAR(1)) != '59ec98a1e3fcf0dd':
+                        continue
+
+                ecnt += 1
+                self.click(algo.SUB_NEAR(0), 700)
+                self.update()
+                if self.subhash(algo.SUB_ACTION(1)) == '2b0930926b15d56b': # 种植1
+                    self.click(algo.SUB_ACTION(1), 700)
+                elif self.subhash(algo.SUB_ACTION(2)) == 'ad72c13b25381650': # 种植2
+                    self.click(algo.SUB_ACTION(2), 700)
+                else:
+                    log('W: no plant button')
+                    break
+                self.click((320, 260), 500)
+                self.update()
+                if not algo.ismenu(self.s):
+                    log('W: no seed')
+                    self.click(algo.POS_IDLE)
+                    ecnt = 5
+                    break
 
 
     def all(self):
@@ -509,6 +601,10 @@ class wuxia:
             self.go(('姑苏', (37, 38)))
             self.fishing()
 
+        if not self.isdone('plant'):
+            self.setdone('plant')
+            self.plant()
+
         if self.stamina() > 140:
             self.fight()
 
@@ -517,8 +613,11 @@ class wuxia:
 
 wx = wuxia()
 if '-act' in sys.argv:
-    for i in range(3):
+    for i in range(4):
         print(i, algo.subhash(wx.s, algo.SUB_ACTION(i)))
+
+elif '-doact' in sys.argv:
+    wx.doact()
 
 elif '-shop' in sys.argv:
     for i in range(8):
@@ -527,11 +626,22 @@ elif '-shop' in sys.argv:
 elif '-fight' in sys.argv:
     wx.fight()
 
+elif '-work' in sys.argv:
+    wx.work()
+
+elif '-plant' in sys.argv:
+    wx.plant()
+
 elif '-save' in sys.argv:
     wx.s.save('_save.png')
 
 elif '-test' in sys.argv:
-    print(algo.subhash(wx.s, algo.SUB_CANCEL, True))
+    #print(algo.subhash(wx.s, algo.SUB_PLANTING, True))
+    print(algo.ismenu(wx.s))
+
+elif '-test2' in sys.argv:
+    s = Image.open('_save.png')
+    print(algo.subhash(s, algo.SUB_PLANTING, True))
 
 elif '-save20' in sys.argv:
     for i in range(20):
